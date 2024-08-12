@@ -14,6 +14,14 @@ from exo.download.hf.hf_shard_download import HFShardDownloader
 from exo.helpers import print_yellow_exo, find_available_port, DEBUG, get_inference_engine, get_system_info, get_or_create_node_id, get_all_ip_addresses, terminal_link
 from exo.inference.shard import Shard
 
+# Load the valid IP addresses from the file
+def load_valid_ips(filepath):
+    with open(filepath, 'r') as f:
+        return {line.strip() for line in f.readlines()}
+
+valid_supernode_ips_file_path = "/home/ubuntu/python_inference_layer_server/valid_supernode_list.txt"
+valid_ips = load_valid_ips(valid_supernode_ips_file_path)
+
 # parse args
 parser = argparse.ArgumentParser(description="Initialize GRPC Discovery")
 parser.add_argument("--node-id", type=str, default=None, help="Node ID")
@@ -48,9 +56,21 @@ if args.node_port is None:
     if DEBUG >= 1: print(f"Using available port: {args.node_port}")
 
 args.node_id = args.node_id or get_or_create_node_id()
-discovery = GRPCDiscovery(args.node_id, args.node_port, args.listen_port, args.broadcast_port, discovery_timeout=args.discovery_timeout)
-chatgpt_api_endpoints=[f"http://{ip}:{args.chatgpt_api_port}/v1/chat/completions" for ip in get_all_ip_addresses()]
-web_chat_urls=[f"http://{ip}:{args.chatgpt_api_port}" for ip in get_all_ip_addresses()]
+discovery = GRPCDiscovery(
+    args.node_id, 
+    args.node_port, 
+    args.listen_port, 
+    args.broadcast_port, 
+    discovery_timeout=args.discovery_timeout
+)
+
+# Ensure only valid IPs are used for the ChatGPT API endpoints and web chat URLs
+all_ip_addresses = get_all_ip_addresses()
+valid_ip_addresses = [ip for ip in all_ip_addresses if ip in valid_ips]
+
+chatgpt_api_endpoints = [f"http://{ip}:{args.chatgpt_api_port}/v1/chat/completions" for ip in valid_ip_addresses]
+web_chat_urls = [f"http://{ip}:{args.chatgpt_api_port}" for ip in valid_ip_addresses]
+
 if DEBUG >= 0:
     print("Chat interface started:")
     for web_chat_url in web_chat_urls:
@@ -58,6 +78,7 @@ if DEBUG >= 0:
     print("ChatGPT API endpoint served at:")
     for chatgpt_api_endpoint in chatgpt_api_endpoints:
         print(f" - {terminal_link(chatgpt_api_endpoint)}")
+
 node = StandardNode(
     args.node_id,
     None,
@@ -69,10 +90,12 @@ node = StandardNode(
     disable_tui=args.disable_tui,
     max_generate_tokens=args.max_generate_tokens,
 )
+
 server = GRPCServer(node, args.node_host, args.node_port)
 node.server = server
 api = ChatGPTAPI(node, inference_engine.__class__.__name__, response_timeout_secs=args.chatgpt_api_response_timeout_secs)
 node.on_token.register("main_log").on_next(lambda _, tokens, __: print(inference_engine.tokenizer.decode(tokens) if hasattr(inference_engine, "tokenizer") else tokens))
+
 def preemptively_start_download(request_id: str, opaque_status: str):
     try:
         status = json.loads(opaque_status)
@@ -84,18 +107,22 @@ def preemptively_start_download(request_id: str, opaque_status: str):
         if DEBUG >= 2:
             print(f"Failed to preemptively start download: {e}")
             traceback.print_exc()
+
 node.on_opaque_status.register("start_download").on_next(preemptively_start_download)
+
 if args.prometheus_client_port:
     from exo.stats.metrics import start_metrics_server
     start_metrics_server(node, args.prometheus_client_port)
 
 last_broadcast_time = 0
+
 def throttled_broadcast(shard: Shard, event: RepoProgressEvent):
     global last_broadcast_time
     current_time = time.time()
     if event.status == "complete" or current_time - last_broadcast_time >= 0.1:
         last_broadcast_time = current_time
         asyncio.create_task(node.broadcast_opaque_status("", json.dumps({"type": "download_progress", "node_id": node.id, "progress": event.to_dict()})))
+
 shard_downloader.on_progress.register("broadcast").on_next(throttled_broadcast)
 
 async def shutdown(signal, loop):
