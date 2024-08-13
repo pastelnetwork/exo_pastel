@@ -36,12 +36,20 @@ class Topology:
           edges.append((node, neighbor))
     return edges
 
+  def contains_node(self, node_id: str) -> bool:
+      return node_id in self.nodes
+
   def merge(self, other: "Topology"):
-    for node_id, capabilities in other.nodes.items():
-      self.update_node(node_id, capabilities)
-    for node_id, neighbors in other.peer_graph.items():
-      for neighbor in neighbors:
-        self.add_edge(node_id, neighbor)
+      for node_id, capabilities in other.nodes.items():
+          if node_id in self.nodes:
+              # Only update if the new capabilities are different
+              if self.nodes[node_id] != capabilities:
+                  self.update_node(node_id, capabilities)
+          else:
+              self.update_node(node_id, capabilities)
+      for node_id, neighbors in other.peer_graph.items():
+          for neighbor in neighbors:
+              self.add_edge(node_id, neighbor)
 
   def __str__(self):
     nodes_str = ", ".join(f"{node_id}: {cap}" for node_id, cap in self.nodes.items())

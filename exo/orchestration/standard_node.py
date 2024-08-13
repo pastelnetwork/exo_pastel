@@ -35,7 +35,7 @@ class StandardNode(Node):
         self.server = server
         self.discovery = discovery
         self.partitioning_strategy = partitioning_strategy
-        self.peers: List[PeerHandle] = {}
+        self.peers: Dict[str, PeerHandle] = {}  # Changed from List to Dict for easier management
         self.topology: Topology = Topology()
         self.device_capabilities = device_capabilities()
         self.buffered_token_output: Dict[str, Tuple[List[int], bool]] = {}
@@ -288,15 +288,22 @@ class StandardNode(Node):
         return shards[current_partition_index]
 
     async def update_peers(self, wait_for_peers: int = 0) -> None:
-        self.peers = await self.discovery.discover_peers(wait_for_peers)
-        for peer in self.peers:
-            is_connected = await peer.is_connected()
-            if DEBUG >= 2 and is_connected:
-                print(f"Already connected to {peer.id()}: {is_connected}")
-            if not is_connected:
-                if DEBUG >= 2: print(f"Connecting to {peer.id()}...")
-                await peer.connect()
-                if DEBUG >= 1: print(f"Connected to peer {peer.device_capabilities()} ({peer.id()=})")
+        discovered_peers = await self.discovery.discover_peers(wait_for_peers)
+        for peer in discovered_peers:
+            if peer.id() not in self.peers:
+                self.peers[peer.id()] = peer
+                if not await peer.is_connected():
+                    if DEBUG >= 2: print(f"Connecting to {peer.id()}...")
+                    await peer.connect()
+                    if DEBUG >= 1: print(f"Connected to peer {peer.device_capabilities()} ({peer.id()=})")
+            else:
+                if DEBUG >= 2: print(f"Peer {peer.id()} already in peers list")
+
+        # Remove peers that are no longer discovered
+        peers_to_remove = set(self.peers.keys()) - set(peer.id() for peer in discovered_peers)
+        for peer_id in peers_to_remove:
+            if DEBUG >= 1: print(f"Removing peer {peer_id} as it's no longer discovered")
+            del self.peers[peer_id]
 
     async def periodic_topology_collection(self, interval: int):
         while True:
@@ -304,8 +311,10 @@ class StandardNode(Node):
             try:
                 await self.update_peers()
                 await self.collect_topology()
+                if DEBUG >= 2: print(f"Updated topology: {self.topology}")
             except Exception as e:
                 print(f"Error collecting topology: {e}")
+                traceback.print_exc()
 
     async def get_inference_result(self, request_id: str) -> Tuple[Optional[np.ndarray], bool]:
         if request_id not in self.buffered_token_output:
@@ -319,27 +328,30 @@ class StandardNode(Node):
         if DEBUG >= 2: print(f"Collecting topology {max_depth=} {visited=}")
 
         prev_visited = visited.copy()
-        visited.update(p.id() for p in self.peers)
+        visited.update(p.id() for p in self.peers.values())
 
-        for peer in self.peers:
-            next_topology.update_node(peer.id(), peer.device_capabilities())
-            next_topology.add_edge(self.id, peer.id())
+        for peer in self.peers.values():
+            peer_ip = peer.address.split(':')[0]
+            if peer_ip in valid_ips:
+                next_topology.update_node(peer.id(), peer.device_capabilities())
+                next_topology.add_edge(self.id, peer.id())
 
-            if peer.id() in prev_visited:
-                continue
+                if peer.id() in prev_visited:
+                    continue
 
-            if max_depth <= 0:
-                if DEBUG >= 2: print("Max depth reached. Skipping...")
-                continue
+                if max_depth <= 0:
+                    if DEBUG >= 2: print("Max depth reached. Skipping...")
+                    continue
 
-            try:
-                other_topology = await peer.collect_topology(visited, max_depth=max_depth - 1)
-                if DEBUG >= 2: print(f"Collected topology from: {peer.id()}: {other_topology}")
-                self.topology.merge(other_topology)
-            except Exception as e:
-                print(f"Error collecting topology from {peer.id()}: {e}")
+                try:
+                    other_topology = await peer.collect_topology(visited, max_depth=max_depth - 1)
+                    if DEBUG >= 2: print(f"Collected topology from: {peer.id()}: {other_topology}")
+                    next_topology.merge(other_topology)
+                except Exception as e:
+                    print(f"Error collecting topology from {peer.id()}: {e}")
+                    traceback.print_exc()
 
-        next_topology.active_node_id = self.topology.active_node_id  # this is not so clean.
+        next_topology.active_node_id = self.topology.active_node_id
         self.topology = next_topology
         if self.topology_viz:
             self.topology_viz.update_visualization(self.current_topology, self.partitioning_strategy.partition(self.current_topology), self.id)

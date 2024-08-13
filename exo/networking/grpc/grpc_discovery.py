@@ -73,36 +73,26 @@ class GRPCDiscovery(Discovery):
         if DEBUG_DISCOVERY >= 2:
             print("Starting peer discovery process...")
 
-        if wait_for_peers > 0:
-            while len(self.known_peers) == 0:
-                if DEBUG_DISCOVERY >= 2:
-                    print("No peers discovered yet, retrying in 1 second...")
-                await asyncio.sleep(1)  # Keep trying to find peers
+        while len(self.known_peers) < wait_for_peers:
             if DEBUG_DISCOVERY >= 2:
-                print(f"Discovered first peer: {next(iter(self.known_peers.values()))}")
+                print(f"Waiting for more peers. Current: {len(self.known_peers)}, Required: {wait_for_peers}")
+            await asyncio.sleep(1)
 
-        grace_period = 5  # seconds
-        while True:
-            initial_peer_count = len(self.known_peers)
-            if DEBUG_DISCOVERY >= 2:
-                print(f"Current number of known peers: {initial_peer_count}. Waiting {grace_period} seconds to discover more...")
-            if len(self.known_peers) == initial_peer_count:
-                if wait_for_peers > 0:
-                    await asyncio.sleep(grace_period)
-                    if DEBUG_DISCOVERY >= 2:
-                        print(f"Waiting additional {wait_for_peers} seconds for more peers.")
-                    wait_for_peers = 0
-                else:
-                    if DEBUG_DISCOVERY >= 2:
-                        print("No new peers discovered in the last grace period. Ending discovery process.")
-                    break  # No new peers found in the grace period, we are done
+        # Filter known_peers based on valid_ips
+        valid_peers = [
+            peer_handle for peer_handle, _, _ in self.known_peers.values()
+            if peer_handle.address.split(':')[0] in valid_ips
+        ]
 
-        return [peer_handle for peer_handle, _, _ in self.known_peers.values()]
+        if DEBUG_DISCOVERY >= 2:
+            print(f"Discovered {len(valid_peers)} valid peers out of {len(self.known_peers)} total peers")
+
+        return valid_peers
 
     async def task_broadcast_presence(self):
-        transport, _ = await asyncio.get_event_loop().create_datagram_endpoint(lambda: asyncio.DatagramProtocol(), local_addr=("0.0.0.0", 0), family=socket.AF_INET)
-        sock = transport.get_extra_info("socket")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind(('', 0))
 
         message = json.dumps(
             {
@@ -116,37 +106,28 @@ class GRPCDiscovery(Discovery):
         while True:
             try:
                 if DEBUG_DISCOVERY >= 3:
-                    print(f"Broadcast presence: {message}")
-                transport.sendto(message, ("<broadcast>", self.broadcast_port))
+                    print(f"Broadcasting presence to valid IPs: {message}")
+                for ip in valid_ips:
+                    sock.sendto(message, (ip, self.broadcast_port))
                 await asyncio.sleep(self.broadcast_interval)
             except Exception as e:
                 print(f"Error in broadcast presence: {e}")
                 import traceback
-
                 print(traceback.format_exc())
 
     async def on_listen_message(self, data, addr):
         if not data:
             return
 
-        decoded_data = data.decode("utf-8", errors="ignore")
-
-        # Check if the decoded data starts with a valid JSON character
-        if not (decoded_data.strip() and decoded_data.strip()[0] in "{["):
-            if DEBUG_DISCOVERY >= 2:
-                print(f"Received invalid JSON data from {addr}: {decoded_data[:100]}")
-            return
-
         try:
-            decoder = json.JSONDecoder(strict=False)
-            message = decoder.decode(decoded_data)
-        except json.JSONDecodeError as e:
+            message = json.loads(data.decode("utf-8"))
+        except json.JSONDecodeError:
             if DEBUG_DISCOVERY >= 2:
-                print(f"Error decoding JSON data from {addr}: {e}")
+                print(f"Received invalid JSON data from {addr}")
             return
 
         if DEBUG_DISCOVERY >= 2:
-            print(f"received from peer {addr}: {message}")
+            print(f"Received message from peer {addr}: {message}")
 
         if message["type"] == "discovery" and message["node_id"] != self.node_id:
             peer_id = message["node_id"]
@@ -154,23 +135,24 @@ class GRPCDiscovery(Discovery):
             peer_port = message["grpc_port"]
             device_capabilities = DeviceCapabilities(**message["device_capabilities"])
 
-            # Check if the peer's IP address is in the valid IP list
             if peer_host in valid_ips:
                 if peer_id not in self.known_peers:
+                    print(f"Discovered peer: {peer_id} at {peer_host}:{peer_port}")
                     self.known_peers[peer_id] = (
                         GRPCPeerHandle(peer_id, f"{peer_host}:{peer_port}", device_capabilities),
                         time.time(),
                         time.time(),
                     )
-                    if DEBUG_DISCOVERY >= 2:
-                        print(f"Discovered new peer {peer_id} at {peer_host}:{peer_port}")
-                self.known_peers[peer_id] = (self.known_peers[peer_id][0], self.known_peers[peer_id][1], time.time())
+                else:
+                    self.known_peers[peer_id] = (self.known_peers[peer_id][0], self.known_peers[peer_id][1], time.time())
             else:
-                if DEBUG_DISCOVERY >= 2:
-                    print(f"Peer {peer_host} is not in the list of valid IPs. Ignoring.")
+                print(f"Ignoring peer {peer_id} at {peer_host} - IP not in valid list.")
 
     async def task_listen_for_peers(self):
-        await asyncio.get_event_loop().create_datagram_endpoint(lambda: ListenProtocol(self.on_listen_message), local_addr=("0.0.0.0", self.listen_port))
+        await asyncio.get_event_loop().create_datagram_endpoint(
+            lambda: ListenProtocol(self.on_listen_message),
+            local_addr=("0.0.0.0", self.listen_port)
+        )
         if DEBUG_DISCOVERY >= 2:
             print("Started listen task")
 
@@ -183,13 +165,6 @@ class GRPCDiscovery(Discovery):
                     for peer_handle, connected_at, last_seen in self.known_peers.values()
                     if (not await peer_handle.is_connected() and current_time - connected_at > self.discovery_timeout) or current_time - last_seen > self.discovery_timeout
                 ]
-                if DEBUG_DISCOVERY >= 2:
-                    print(
-                        "Peer statuses:",
-                        {peer_handle.id(): f"is_connected={await peer_handle.is_connected()}, {connected_at=}, {last_seen=}" for peer_handle, connected_at, last_seen in self.known_peers.values()},
-                    )
-                if DEBUG_DISCOVERY >= 2 and len(peers_to_remove) > 0:
-                    print(f"Cleaning up peers: {peers_to_remove}")
                 for peer_id in peers_to_remove:
                     if peer_id in self.known_peers:
                         del self.known_peers[peer_id]
@@ -199,5 +174,4 @@ class GRPCDiscovery(Discovery):
             except Exception as e:
                 print(f"Error in cleanup peers: {e}")
                 import traceback
-
                 print(traceback.format_exc())

@@ -34,14 +34,12 @@ class GRPCPeerHandle(PeerHandle):
         return self._device_capabilities
 
     async def connect(self):
-        # Check if the IP address is valid before connecting
         ip_address = self.address.split(":")[0]  # Extract IP address from "ip:port"
         if ip_address in valid_ips:
             self.channel = grpc.aio.insecure_channel(self.address, options=[("grpc.max_metadata_size", 32 * 1024 * 1024)])
             self.stub = node_service_pb2_grpc.NodeServiceStub(self.channel)
         else:
-            print(f"IP address {self.address} is not in the list of valid IPs.")
-            return None
+            print(f"IP address {self.address} is not in the list of valid IPs. Connection not established.")
 
     async def is_connected(self) -> bool:
         return self.channel is not None and self.channel.get_state() == grpc.ChannelConnectivity.READY
