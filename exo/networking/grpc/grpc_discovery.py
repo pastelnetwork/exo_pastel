@@ -131,7 +131,7 @@ class GRPCDiscovery(Discovery):
 
         if message["type"] == "discovery" and message["node_id"] != self.node_id:
             peer_id = message["node_id"]
-            peer_host = addr[0]
+            peer_host = addr[0]  # This is the actual IP address of the peer
             peer_port = message["grpc_port"]
             device_capabilities = DeviceCapabilities(**message["device_capabilities"])
 

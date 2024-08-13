@@ -17,7 +17,7 @@ from exo.inference.shard import Shard
 # Load the valid IP addresses from the file
 def load_valid_ips(filepath):
     with open(filepath, 'r') as f:
-        return {line.strip() for line in f.readlines()}
+        return {line.strip() for line in f}
 
 valid_supernode_ips_file_path = "/home/ubuntu/python_inference_layer_server/valid_supernode_list.txt"
 valid_ips = load_valid_ips(valid_supernode_ips_file_path)
@@ -56,6 +56,12 @@ if args.node_port is None:
     if DEBUG >= 1: print(f"Using available port: {args.node_port}")
 
 args.node_id = args.node_id or get_or_create_node_id()
+
+# Ensure the node_host is a valid IP
+args.node_host = next((ip for ip in get_all_ip_addresses() if ip in valid_ips), "0.0.0.0")
+if DEBUG >= 1:
+    print(f"Using node host: {args.node_host}")
+
 discovery = GRPCDiscovery(
     args.node_id, 
     args.node_port, 
@@ -64,15 +70,15 @@ discovery = GRPCDiscovery(
     discovery_timeout=args.discovery_timeout
 )
 
-# Ensure only valid IPs are used for the ChatGPT API endpoints and web chat URLs
-all_ip_addresses = get_all_ip_addresses()
-valid_ip_addresses = [ip for ip in all_ip_addresses if ip in valid_ips]
-
-chatgpt_api_endpoints = [f"http://{ip}:{args.chatgpt_api_port}/v1/chat/completions" for ip in valid_ip_addresses]
-web_chat_urls = [f"http://{ip}:{args.chatgpt_api_port}" for ip in valid_ip_addresses]
+# Use valid_ips directly for ChatGPT API endpoints and web chat URLs
+chatgpt_api_endpoints = [f"http://{ip}:{args.chatgpt_api_port}/v1/chat/completions" for ip in valid_ips]
+web_chat_urls = [f"http://{ip}:{args.chatgpt_api_port}" for ip in valid_ips]
 
 if DEBUG >= 0:
-    print("Chat interface started:")
+    print("Valid IPs for the cluster:")
+    for ip in valid_ips:
+        print(f" - {ip}")
+    print("\nChat interface started:")
     for web_chat_url in web_chat_urls:
         print(f" - {terminal_link(web_chat_url)}")
     print("ChatGPT API endpoint served at:")
@@ -140,7 +146,6 @@ async def shutdown(signal, loop):
 async def main():
     loop = asyncio.get_running_loop()
 
-    # Use a more direct approach to handle signals
     def handle_exit():
         asyncio.ensure_future(shutdown(signal.SIGTERM, loop))
 
@@ -148,9 +153,15 @@ async def main():
         loop.add_signal_handler(s, handle_exit)
 
     await node.start(wait_for_peers=args.wait_for_peers)
+    if DEBUG >= 1:
+        print(f"Node started. Current topology: {node.current_topology}")
     asyncio.create_task(api.run(port=args.chatgpt_api_port))  # Start the API server as a non-blocking task
 
-    await asyncio.Event().wait()
+    while True:
+        await asyncio.sleep(10)
+        if DEBUG >= 1:
+            print(f"Current topology: {node.current_topology}")
+            print(f"Current peers: {[f'{p.id()} at {p.get_ip()}' for p in node.peers.values()]}")
 
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()

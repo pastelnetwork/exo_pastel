@@ -23,12 +23,16 @@ class GRPCPeerHandle(PeerHandle):
     def __init__(self, _id: str, address: str, device_capabilities: DeviceCapabilities):
         self._id = _id
         self.address = address
+        self.ip = address.split(':')[0]  # Extract IP from address
         self._device_capabilities = device_capabilities
         self.channel = None
         self.stub = None
 
     def id(self) -> str:
         return self._id
+      
+    def get_ip(self) -> str:
+        return self.ip      
 
     def device_capabilities(self) -> DeviceCapabilities:
         return self._device_capabilities
