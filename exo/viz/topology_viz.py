@@ -15,48 +15,48 @@ from exo.topology.device_capabilities import UNKNOWN_DEVICE_CAPABILITIES
 
 class TopologyViz:
   def __init__(self, chatgpt_api_endpoints: List[str] = [], web_chat_urls: List[str] = []):
-    self.chatgpt_api_endpoints = chatgpt_api_endpoints
-    self.web_chat_urls = web_chat_urls
-    self.topology = Topology()
-    self.partitions: List[Partition] = []
-    self.node_id = None
-    self.node_download_progress: Dict[str, RepoProgressEvent] = {}
+      self.chatgpt_api_endpoints = chatgpt_api_endpoints
+      self.web_chat_urls = web_chat_urls
+      self.topology = Topology()
+      self.partitions: List[Partition] = []
+      self.node_id = None
+      self.node_download_progress: Dict[str, RepoProgressEvent] = {}
 
-    self.console = Console()
-    self.layout = Layout()
-    self.layout.split(
-      Layout(name="main"),
-      Layout(name="download", size=25)
-    )
-    self.main_panel = Panel(self._generate_main_layout(), title="Exo Cluster (0 nodes)", border_style="bright_yellow")
-    self.download_panel = Panel("", title="Download Progress", border_style="cyan")
-    self.layout["main"].update(self.main_panel)
-    self.layout["download"].update(self.download_panel)
-    self.live_panel = Live(self.layout, auto_refresh=False, console=self.console)
-    self.live_panel.start()
+      self.console = Console()
+      self.layout = Layout()
+      self.layout.split(
+          Layout(name="main"),
+          Layout(name="download", size=25)
+      )
+      self.main_panel = Panel(self._generate_main_layout(), title="Exo Cluster (0 nodes)", border_style="bright_yellow")
+      self.download_panel = Panel("", title="Download Progress", border_style="cyan")
+      self.layout["main"].update(self.main_panel)
+      self.layout["download"].update(self.download_panel)
+      self.live_panel = Live(self.layout, auto_refresh=False, console=self.console)
+      self.live_panel.start()
 
   def update_visualization(self, topology: Topology, partitions: List[Partition], node_id: Optional[str] = None, node_download_progress: Dict[str, RepoProgressEvent] = {}):
-    self.topology = topology
-    self.partitions = partitions
-    self.node_id = node_id
-    if node_download_progress:
-      self.node_download_progress = node_download_progress
-    self.refresh()
+      self.topology = topology
+      self.partitions = partitions
+      self.node_id = node_id
+      if node_download_progress:
+          self.node_download_progress = node_download_progress
+      self.refresh()
 
   def refresh(self):
-    self.main_panel.renderable = self._generate_main_layout()
-    # Update the panel title with the number of nodes and partitions
-    node_count = len(self.topology.nodes)
-    self.main_panel.title = f"Exo Cluster ({node_count} node{'s' if node_count != 1 else ''})"
+      self.main_panel.renderable = self._generate_main_layout()
+      # Update the panel title with the number of nodes and partitions
+      node_count = len(self.topology.nodes)
+      self.main_panel.title = f"Exo Cluster ({node_count} node{'s' if node_count != 1 else ''})"
 
-    # Only show download_panel if there are in-progress downloads
-    if any(progress.status == "in_progress" for progress in self.node_download_progress.values()):
-      self.download_panel.renderable = self._generate_download_layout()
-      self.layout["download"].visible = True
-    else:
-      self.layout["download"].visible = False
+      # Only show download_panel if there are in-progress downloads
+      if any(progress.status == "in_progress" for progress in self.node_download_progress.values()):
+          self.download_panel.renderable = self._generate_download_layout()
+          self.layout["download"].visible = True
+      else:
+          self.layout["download"].visible = False
 
-    self.live_panel.update(self.layout, refresh=True)
+      self.live_panel.update(self.layout, refresh=True)
 
   def _generate_main_layout(self) -> str:
     # Calculate visualization parameters

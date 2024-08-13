@@ -290,7 +290,7 @@ class StandardNode(Node):
     async def update_peers(self, wait_for_peers: int = 0) -> None:
         discovered_peers = await self.discovery.discover_peers(wait_for_peers)
         for peer in discovered_peers:
-            peer_ip = peer.address.split(':')[0]  # Extract IP from the address
+            peer_ip = peer.address.split(':')[0]
             if peer_ip in valid_ips:
                 if peer.id() not in self.peers:
                     self.peers[peer.id()] = peer
@@ -298,6 +298,9 @@ class StandardNode(Node):
                         if DEBUG >= 2: print(f"Connecting to {peer.id()} at {peer_ip}...")
                         await peer.connect()
                         if DEBUG >= 1: print(f"Connected to peer {peer.device_capabilities()} ({peer.id()=}) at {peer_ip}")
+                        # Update topology when a new peer is connected
+                        self.topology.update_node(peer.id(), peer.device_capabilities())
+                        self.topology.add_edge(self.id, peer.id())
                 else:
                     if DEBUG >= 2: print(f"Peer {peer.id()} at {peer_ip} already in peers list")
             else:
@@ -305,10 +308,17 @@ class StandardNode(Node):
 
         # Remove peers that are no longer discovered or have invalid IPs
         peers_to_remove = [peer_id for peer_id, peer in self.peers.items() 
-                          if peer.id() not in [p.id() for p in discovered_peers] or peer.address.split(':')[0] not in valid_ips]
+                           if peer.id() not in [p.id() for p in discovered_peers] or peer.address.split(':')[0] not in valid_ips]
         for peer_id in peers_to_remove:
             if DEBUG >= 1: print(f"Removing peer {peer_id} at {self.peers[peer_id].address.split(':')[0]} as it's no longer discovered or has an invalid IP")
             del self.peers[peer_id]
+            # Update topology when a peer is removed
+            self.topology.nodes.pop(peer_id, None)
+            self.topology.peer_graph.pop(peer_id, None)
+
+        # Update visualization after peers are updated
+        if self.topology_viz:
+            self.topology_viz.update_visualization(self.topology, self.partitioning_strategy.partition(self.topology), self.id)
 
     async def periodic_topology_collection(self, interval: int):
         while True:
