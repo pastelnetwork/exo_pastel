@@ -144,9 +144,12 @@ class GRPCDiscovery(Discovery):
                         time.time(),
                     )
                 else:
-                    self.known_peers[peer_id] = (self.known_peers[peer_id][0], self.known_peers[peer_id][1], time.time())
+                    # Update the existing peer's last seen time
+                    existing_peer, connected_at, _ = self.known_peers[peer_id]
+                    self.known_peers[peer_id] = (existing_peer, connected_at, time.time())
             else:
-                print(f"Ignoring peer {peer_id} at {peer_host} - IP not in valid list.")
+                if DEBUG_DISCOVERY >= 1:
+                    print(f"Received message from {peer_id} at {peer_host}, but IP is not in valid list. Message: {message}")
 
     async def task_listen_for_peers(self):
         await asyncio.get_event_loop().create_datagram_endpoint(

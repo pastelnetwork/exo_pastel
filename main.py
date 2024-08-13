@@ -21,6 +21,7 @@ def load_valid_ips(filepath):
 
 valid_supernode_ips_file_path = "/home/ubuntu/python_inference_layer_server/valid_supernode_list.txt"
 valid_ips = load_valid_ips(valid_supernode_ips_file_path)
+print(f"Loaded valid IPs: {valid_ips}")
 
 # parse args
 parser = argparse.ArgumentParser(description="Initialize GRPC Discovery")
